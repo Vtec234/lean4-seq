@@ -8,6 +8,8 @@ import SEq.Basic
 
 variable {α : Type u} {a b c : α} {β : α → Type v} {x : β a} {y : β b}
 
+/-! ## `dcast` lemmas -/
+
 @[simp]
 theorem dcast_rfl (h : a = a) (x : β a) : h d[β]▸ x = x := by
   rfl
@@ -18,25 +20,44 @@ theorem dcast_dcast (h : a = b) (h' : b = c) (x : β a) :
   cases h
   simp
 
-theorem seq_iff_dcast_eq : x =[β]= y ↔ ∃ (h : a = b), h d[β]▸ x = y := by
-  constructor
-  . intro h
-    cases h
-    simp
-  . intro ⟨h, h'⟩
-    cases h
-    rw [dcast_rfl] at h'
-    simp [h']
+theorem dcast_comp {α' : Type u} {a b : α'} {f : α' → α} (h : a = b) (x : β (f a)) :
+    h d[fun x => β (f x)]▸ x = (congrArg f h) d[β]▸ x := by
+  cases h
+  simp
 
-theorem seq_iff_eq_dcast : x =[β]= y ↔ ∃ (h : b = a), x = h d[β]▸ y := by
+theorem Sigma.eq_iff_dcast_eq {p q : Sigma β} :
+    p = q ↔ ∃ (h : p.fst = q.fst), h d[β]▸ p.snd = q.snd := by
   constructor
   . intro h
     cases h
     simp
   . intro ⟨h, h'⟩
+    let ⟨_, _⟩ := p
+    let ⟨_, _⟩ := q
     cases h
-    rw [dcast_rfl] at h'
-    simp [h']
+    cases h'
+    rfl
+
+theorem Sigma.eq_iff_eq_dcast {p q : Sigma β} :
+    p = q ↔ ∃ (h : p.fst = q.fst), p.snd = h.symm d[β]▸ q.snd := by
+  constructor
+  . intro h
+    cases h
+    simp
+  . intro ⟨h, h'⟩
+    let ⟨_, _⟩ := p
+    let ⟨_, _⟩ := q
+    cases h
+    cases h'
+    rfl
+
+/-! ## `SEq` lemmas -/
+
+theorem seq_iff_dcast_eq : x =[β]= y ↔ ∃ (h : a = b), h d[β]▸ x = y :=
+  Sigma.eq_iff_dcast_eq
+
+theorem seq_iff_eq_dcast : x =[β]= y ↔ ∃ (h : a = b), x = h.symm d[β]▸ y :=
+  Sigma.eq_iff_eq_dcast
 
 theorem seq_iff_eq_and_heq : x =[β]= y ↔ a = b ∧ HEq x y := by
   constructor

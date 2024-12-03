@@ -49,7 +49,9 @@ def mkLeftSigmaLambda (n : Name) (bi : BinderInfo) (xs : Array Expr) (b : Expr) 
   let (sigma, _) ← xs.size.foldM (init := (.bvar 1337, .zero)) fun i (s, u) => do
     match ← getFVarLocalDecl xs[i]! with
     | .cdecl _ _ n ty bi _ =>
-      let .sort (.succ v) ← inferType ty
+      let .sort v ← inferType ty >>= whnf
+        | throwError "expected a sort, got {ty}"
+      let .succ v ← instantiateLevelMVars v
         | throwError "expected a type, got {ty}"
       if i == 0 then
         return (ty, v)
