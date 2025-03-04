@@ -26,7 +26,7 @@ which does not entail `h.1 = h'.1`.
 from a left-associated dependent sum `e : Σ (…), …` with `n` components.
 Assumes `i < n`. -/
 def mkLeftSigmaProjection (e : Expr) (i n : Nat) : Expr :=
-  (n - i).foldRev (init := e) fun j e =>
+  (n - i).foldRev (init := e) fun j _ e =>
     if i == 0 && j == 0 then e
     else .proj ``Sigma (if j == 0 then 1 else 0) e
 
@@ -34,7 +34,7 @@ def mkLeftSigmaProjection (e : Expr) (i n : Nat) : Expr :=
 providing all the arguments of `A #(k-1) … #2 #1 #0 : Type v`,
 return `Σ (p : sigma), A … p.1.1.2 p.1.2 p.2 : Type (max u v)`. -/
 def mkLeftSigmaBVars (n : Name) (bi : BinderInfo) (u v : Level) (sigma A : Expr) (k : Nat) : Expr :=
-  let sigPs := k.fold (init := #[]) fun i acc => acc.push <|
+  let sigPs := k.fold (init := #[]) fun i _ acc => acc.push <|
     mkLeftSigmaProjection (.bvar 0) i k
   let b := mkLambda n bi sigma (A.instantiateRev sigPs)
   mkApp2 (.const ``Sigma [u, v]) sigma b
@@ -46,7 +46,7 @@ and `pᵢ` is the `i`-th projection from `p`. -/
 def mkLeftSigmaLambda (n : Name) (bi : BinderInfo) (xs : Array Expr) (b : Expr) : MetaM Expr := do
   if 0 == xs.size then
     throwError "cannot compute dependent sum of no components"
-  let (sigma, _) ← xs.size.foldM (init := (.bvar 1337, .zero)) fun i (s, u) => do
+  let (sigma, _) ← xs.size.foldM (init := (.bvar 1337, .zero)) fun i _ (s, u) => do
     match ← getFVarLocalDecl xs[i]! with
     | .cdecl _ _ n ty bi _ =>
       let .sort v ← inferType ty >>= whnf
@@ -58,7 +58,7 @@ def mkLeftSigmaLambda (n : Name) (bi : BinderInfo) (xs : Array Expr) (b : Expr) 
       let lvl := Level.normalize (.max u v)
       return (mkLeftSigmaBVars n bi u v s (ty.abstractRange i xs) i, lvl)
     | .ldecl .. => panic! "let-binding not supported"
-  let sigPs := xs.size.fold (init := #[]) fun i acc => acc.push <|
+  let sigPs := xs.size.fold (init := #[]) fun i _ acc => acc.push <|
     mkLeftSigmaProjection (.bvar 0) i xs.size
   return mkLambda n bi sigma ((b.abstract xs).instantiateRev sigPs)
 

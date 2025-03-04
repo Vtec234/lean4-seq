@@ -4,7 +4,6 @@ axiom Vector : Nat → Type
 axiom VectorA : {n : Nat} → Vector n → Type
 axiom VectorB : {n : Nat} → {v : Vector n} → VectorA v → Type
 axiom VectorC : {n : Nat} → {v : Vector n} → {a : VectorA v} → VectorB a → Type
-axiom VectorD : {n : Nat} → {v : Vector n} → {a : VectorA v} → {b : VectorB a} → VectorC b → Type
 
 axiom mkVec : (n : Nat) → Vector n
 axiom mkVecA : {n : Nat} → (v : Vector n) → VectorA v
