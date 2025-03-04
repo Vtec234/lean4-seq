@@ -134,7 +134,9 @@ partial def visit (e : Expr) (et? : Option Expr) : M Expr :=
     | .ok e' => pure m!"{e} => {e'} (et: {et?})"
     | .error _ => pure m!"{e} => 💥️") do
   let ctx ← read
-  if !e.hasLooseBVars && e.toHeadIndex == ctx.pHeadIdx && e.headNumArgs == ctx.pNumArgs then
+  if e.hasLooseBVars then
+    throwError "internal error: forgot to instantiate"
+  if e.toHeadIndex == ctx.pHeadIdx && e.headNumArgs == ctx.pNumArgs then
     -- We save the metavariable context here,
     -- so that it can be rolled back unless `occs.contains i`.
     let mctx ← getMCtx
