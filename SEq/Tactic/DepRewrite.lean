@@ -344,9 +344,14 @@ private def depRwContext : MetaM Simp.Context :=
 open Parser Elab Tactic
 
 /--
-`rewrite!` is like `rewrite`, but can handle terms whose type correctness depends on the term being rewritten.
+`rewrite!` is like `rewrite`, but can also rewrite inside types by inserting casts.
+This means that the 'motive is not type correct' error never occurs,
+at the expense of potentially creating complicated terms.
 It is also available as a `conv` tactic.
--/
+
+The sort of casts that are inserted is controlled by the `castMode` configuration option.
+By default, only proof terms are casted:
+by proof irrelevance, this adds no observable complexity. -/
 syntax (name := depRewriteSeq) "rewrite!" optConfig rwRuleSeq (location)? : tactic
 
 /--
