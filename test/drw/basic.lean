@@ -56,7 +56,6 @@ example (f : (k : Nat) → Fin k → Type) (lt : 0 < n) :
   guard_target = P (fst% ((⟨0, _⟩, ()) : Fin m × Unit))
   sorry
 
--- proj (error)
 /-- error: projection type mismatch
   (any x).1 -/
 #guard_msgs in
@@ -85,6 +84,12 @@ example (lt : 0 < n) :
     P (@id (Fin m) x)
   sorry
 
+-- let (proof)
+example (lt' : 0 < n) : P (let lt : 0 < n := lt'; @Fin.mk n 0 (@id (0 < n) lt)) := by
+  rewrite! [eq]
+  guard_target = P (let lt : 0 < m := eq ▸ lt'; @Fin.mk m 0 (@id (0 < m) _))
+  sorry
+
 -- lam
 example : P fun (y : Fin n) => y := by
   rewrite! [eq]
@@ -94,22 +99,41 @@ example : P fun (y : Fin n) => y := by
 -- lam (proof)
 example : P fun (lt : 0 < n) => @Fin.mk n 0 (@id (0 < n) lt) := by
   rewrite! [eq]
-  guard_target = P fun (lt : 0 < m) => @Fin.mk m 0 (@id (0 < m) lt)
+  guard_target = P fun (lt : 0 < m) => @Fin.mk m 0 (@id (0 < m) _)
+  sorry
+
+/-- error: cannot cast
+  y
+to expected type
+  Fin n
+in cast mode 'proofs' -/
+#guard_msgs in
+example (Q : Fin n → Prop) (q : (x : Fin n) → Q x) :
+    P fun y : Fin n => q y := by
+  rewrite! [eq]
   sorry
 
 /-! Tests for all-casts mode. -/
 
 variable (B : Nat → Type)
 
-example (f : (k : Nat) → B k → Nat) (b : B n) :
-    f n b = f m (eq ▸ b) := by
+-- app (polymorphic fn)
+example (f : (k : Nat) → B k → Nat) (b : B n) : P (f n b) := by
   rewrite! (castMode := .all) [eq]
-  dsimp
+  guard_target = P (f m (eq ▸ b))
+  sorry
 
-example (f : B n → Nat) (b : ∀ (k : Nat), B k) :
-    f (b n) = f (eq ▸ b m) := by
+-- app (monomorphic fn)
+example (f : B n → Nat) (b : (k : Nat) → B k) : P (f (b n)) := by
   rewrite! (castMode := .all) [eq]
-  dsimp
+  guard_target = P (f (eq ▸ b m))
+  sorry
+
+-- lam
+example (f : B n → Nat) : P fun y : B n => f y := by
+  rewrite! (castMode := .all) [eq]
+  guard_target = P fun y : B m => f (eq ▸ y)
+  sorry
 
 /-- error: tactic 'drewrite' failed, did not find instance of the pattern in the target expression
   n

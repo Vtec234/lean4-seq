@@ -30,14 +30,19 @@ theorem heqR.{u} {α β : Sort u} {a : α} {b : β} (h : @HEq α a β b) :
 
 initialize
   registerTraceClass `drewrite
-  registerTraceClass `drewrite.visit (inherited := true)
+  registerTraceClass `drewrite.visit
+  registerTraceClass `drewrite.cast
 
 /-- Determines which, if any, type-incorrect subterms
 should be casted along the equality that `drewrite` is rewriting by. -/
 inductive CastMode where
   /-- Don't insert any casts. -/
   | none
-  /-- Only insert casts on proofs. -/
+  /-- Only insert casts on proofs.
+
+  In this mode, it is *not* permitted to cast subterms of proofs that are not themselves proofs.
+  For example, given `y : Fin n`, `P : Fin n → Prop`, `p : (x : Fin n) → P x` and `eq : n = m`,
+  we will not rewrite `p y : P y` to `p (eq ▸ y) : P (eq ▸ y)`. -/
   | proofs
   -- TODO: `proofs` plus "good" user-defined casts such as `Fin.cast`.
   -- | userDef
@@ -77,8 +82,41 @@ structure Context where
   h : Expr
   pHeadIdx : HeadIndex := p.toHeadIndex
   pNumArgs : Nat := p.headNumArgs
+  subst : FVarSubst := {}
 
 abbrev M (α : Type) := ReaderT Context (StateRefT Nat MetaM) α
+
+/-- Check that casting `e : t` to `et` is allowed in the current mode. -/
+def checkCastAllowed (e t et : Expr) : M Unit := do
+  let ctx ← read
+  let throwMismatch : Unit → M Unit := fun _ => do
+    throwError "cannot cast{indentD e}\nto expected type{indentD et}\nin cast mode '{ctx.cfg.castMode}'"
+  if ctx.cfg.castMode == .none then
+    throwMismatch ()
+  if ctx.cfg.castMode == .proofs && !(← isProp t) then
+    throwMismatch ()
+
+/-- If `e : te` is a term whose type mentions `x` or `h` (the generalization variables),
+return `⋯ ▸ e : te[p/x,rfl/h]`.
+Otherwise return `none`. -/
+def castBack? (e te : Expr) : M (Option Expr) := do
+  let ctx ← read
+  if !te.containsFVar ctx.x.fvarId! && !te.containsFVar ctx.h.fvarId! then
+    return none
+  let motive ←
+    withLocalDeclD `x' (← inferType ctx.x) fun x' => do
+    withLocalDeclD `h' (← mkEq ctx.x x') fun h' => do
+      mkLambdaFVars #[x', h'] <| te.replaceFVars #[ctx.x, ctx.h] #[x', ← mkEqTrans ctx.h h']
+  some <$> mkEqRec motive e (← mkEqSymm ctx.h)
+
+def withSubst? (x tx : Expr) (k : M α) : M α := do
+  match ← castBack? x tx with
+  | some e =>
+    -- We do NOT check whether this is an allowed cast here
+    -- because it might not ever be used
+    -- (e.g. if the bound variable is never mentioned).
+    withReader (fun ctx => { ctx with subst := ctx.subst.insert x.fvarId! e }) k
+  | none => k
 
 mutual
 
@@ -93,42 +131,34 @@ to traverse `fun (x : α) => b`,
 we add `x : α[x/p]` to the local context
 and continue traversing `b`.
 `x : α[x/p] ⊢ b` may be ill-typed,
-but the output `x : α[x/p] ⊢ b[x/p]` is well-typed.
-This strategy implies we must traverse proof terms. -/
+but the output `x : α[x/p] ⊢ b[x/p]` is well-typed. -/
 partial def visitAndCast (e : Expr) (et? : Option Expr) : M Expr := do
-  let mut e' ← visit e et?
+  let e' ← visit e et?
   let some et := et? | return e'
-  let mut te' ← inferType e'
+  let te' ← inferType e'
   -- Increase transparency to avoid inserting unnecessary casts
   -- between definientia and definienda (δ reductions).
   if ← withAtLeastTransparency .default <| withNewMCtxDepth <| isDefEq te' et then
     return e'
+  trace[drewrite.cast] "casting{indentD e'}\nto expected type{indentD et}"
+  checkCastAllowed e' te' et
+  -- Try casting from the inferred type,
+  -- and if that doesn't work,
+  -- casting to the expected type.
   let ctx ← read
-  let throwMismatch : Unit → M Unit := fun _ =>
-    throwError "cannot cast{indentD e'}\nto expected type{indentD et}\nin cast mode '{ctx.cfg.castMode}'"
-  if ctx.cfg.castMode == .none then
-    throwMismatch ()
-  if ctx.cfg.castMode == .proofs && !(← isProp te') then
-    throwMismatch ()
-  trace[drewrite.visit] "casting {e'} to expected type {et}"
-  let ctx ← read
-  -- Only cast along inferred type if it contains the generalization variables.
-  if te'.containsFVar ctx.x.fvarId! || te'.containsFVar ctx.h.fvarId! then
-    let motive ← withLocalDeclD `x' (← inferType ctx.x) fun x' => do
-      withLocalDeclD `h' (← mkEq ctx.x x') fun h' => do
-      mkLambdaFVars #[x', h'] <| te'.replaceFVars #[ctx.x, ctx.h] #[x', ← mkEqTrans ctx.h h']
-    e' ← mkEqRec motive e' (← mkEqSymm ctx.h)
-    te' ← inferType e'
-    trace[drewrite.visit] "cast along inferred type: {e'}"
-    if ← withAtLeastTransparency .default <| withNewMCtxDepth <| isDefEq te' et then
-      return e'
+  if let some e'' ← castBack? e' te' then
+    let te'' ← inferType e''
+    if ← withAtLeastTransparency .default <| withNewMCtxDepth <| isDefEq te'' et then
+      trace[drewrite.cast] "from inferred type (x ↦ p):{indentD e'}"
+      return e''
   let motive ← mkLambdaFVars #[ctx.x, ctx.h] et
-  e' ← mkEqRec motive e' ctx.h
-  trace[drewrite.visit] "cast along expected type: {e'}"
+  let e' ← mkEqRec motive e' ctx.h
+  trace[drewrite.cast] "to expected type (p ↦ x):{indentD e'}"
   return e'
 
 /-- Like `visitAndCast`, but does not insert casts at the top level.
 The expected types of certain subterms are computed from `et?`. -/
+-- QUESTION(WN): would a `visit` cache speed this up?
 partial def visit (e : Expr) (et? : Option Expr) : M Expr :=
   withTraceNode `drewrite.visit (fun
     | .ok e' => pure m!"{e} => {e'} (et: {et?})"
@@ -136,6 +166,19 @@ partial def visit (e : Expr) (et? : Option Expr) : M Expr :=
   let ctx ← read
   if e.hasLooseBVars then
     throwError "internal error: forgot to instantiate"
+  if ← isProof e then
+    /- Recall that `e` might be type-incorrect.
+    We assume it will become type-correct after traversal,
+    but by proof irrelevance we can skip traversing proofs,
+    instead casting them at the top-level.
+    However, in this case we need to fix `e`
+    by applying the delayed substitution `subst`
+    which replaces bound variables with type-correct terms.
+    We do not do this eagerly when introducing binders
+    because it can introduce more casts than necessary. -/
+    -- QUESTION(WN): in `.proofs` cast mode,
+    -- can this observably 'leak' non-proof casts in the type of `ctx.subst.apply e`?
+    return ctx.subst.apply e
   if e.toHeadIndex == ctx.pHeadIdx && e.headNumArgs == ctx.pNumArgs then
     -- We save the metavariable context here,
     -- so that it can be rolled back unless `occs.contains i`.
@@ -168,25 +211,31 @@ partial def visit (e : Expr) (et? : Option Expr) : M Expr :=
     let tup ← visit t none
     let vup ← visitAndCast v tup
     withLetDecl n tup vup fun l => do
+    withSubst? l tup do
       let bup ← visitAndCast (b.instantiate1 l) et?
       return e.updateLet! tup vup (bup.abstract #[l])
-  | .lam _ d b _ =>
+  | .lam _ t b _ =>
     match et? with
     | some et =>
       forallBoundedTelescope et (some 1) fun xs bet => do
         let #[r] := xs | throwError m!"function type expected{indentD et}"
-        let bup ← visitAndCast (b.instantiate1 r) bet
-        mkLambdaFVars xs bup
+        withSubst? r (← inferType r) do
+          let bup ← visitAndCast (b.instantiate1 r) bet
+          mkLambdaFVars xs bup
     | none =>
-      let dup ← visit d none
-      lambdaBoundedTelescope (e.updateLambdaE! dup b) 1 fun xs b => do
+      let tup ← visit t none
+      lambdaBoundedTelescope (e.updateLambdaE! tup b) 1 fun xs b => do
+        let #[r] := xs | throwError m!"internal error: lambda expected"
+        withSubst? r tup do
+          let bup ← visit b none
+          mkLambdaFVars xs bup
+  | .forallE _ t b _ =>
+    let tup ← visit t none
+    forallBoundedTelescope (e.updateForallE! tup b) (some 1) fun xs b => do
+      let #[r] := xs | throwError m!"internal error: forall expected"
+      withSubst? r tup do
         let bup ← visit b none
-        mkLambdaFVars xs bup
-  | .forallE _ d b _ =>
-    let dup ← visit d none
-    forallBoundedTelescope (e.updateForallE! dup b) (some 1) fun xs b => do
-      let bup ← visit b none
-      mkForallFVars xs bup
+        mkForallFVars xs bup
   | _ => return e
 
 end
@@ -200,9 +249,7 @@ def dabstract (e : Expr) (p : Expr) (cfg : DRewrite.Config) : MetaM Expr := do
     | .error (err : Lean.Exception) => pure m!"{e} =[x/{p}]=> 💥️{indentD err.toMessageData}") do
   withLocalDeclD `x tp fun x => do
   withLocalDeclD `h (← mkEq p x) fun h => do
-    let e' ← visitAndCast e none
-      |>.run { cfg, p, x, h }
-      |>.run' 1
+    let e' ← visit e none |>.run { cfg, p, x, h } |>.run' 1
     mkLambdaFVars #[x, h] e'
 
 /--
