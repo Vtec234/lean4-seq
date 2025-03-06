@@ -142,7 +142,6 @@ partial def visitAndCast (e : Expr) (et? : Option Expr) : M Expr := do
   -- Increase transparency to avoid inserting unnecessary casts
   -- between definientia and definienda (δ reductions).
   if ← withAtLeastTransparency .default <| withNewMCtxDepth <| isDefEq te' et then
-    trace[drewrite.cast] "defeq! {e'} has type {te'} ≡ {et}"
     return e'
   trace[drewrite.cast] "casting{indentD e'}\nto expected type{indentD et}"
   checkCastAllowed e' te' et
@@ -219,10 +218,10 @@ partial def visit (e : Expr) (et? : Option Expr) : M Expr :=
       return .letE n tup vup (bup.abstract #[r]) bi
   | .lam n t b bi =>
     let tup ← visit t none
-    withLocalDecl n bi tup fun r => do
+    withLocalDecl n bi tup fun r => withSubst? r tup do
       -- TODO(WN): there should be some way to propagate the expected type here,
       -- but it is not easy to do correctly (see `lam (as argument)` tests).
-      let bup ← withSubst? r tup <| visit (b.instantiate1 r) none
+      let bup ← visit (b.instantiate1 r) none
       return .lam n tup (bup.abstract #[r]) bi
   | .forallE n t b bi =>
     let tup ← visit t none
