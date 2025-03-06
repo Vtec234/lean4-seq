@@ -84,7 +84,10 @@ structure Context where
   pNumArgs : Nat := p.headNumArgs
   subst : FVarSubst := {}
 
-abbrev M (α : Type) := ReaderT Context (StateRefT Nat MetaM) α
+/-- Monad for computing `dabstract`.
+The cache is for `visit` (not `visitAndCast`, which has two arguments),
+and the `Nat` tracks which occurrence of the pattern we are currently seeing. -/
+abbrev M := ReaderT Context <| MonadCacheT ExprStructEq Expr <| StateRefT Nat MetaM
 
 /-- Check that casting `e : t` to `et` is allowed in the current mode. -/
 def checkCastAllowed (e t et : Expr) : M Unit := do
@@ -101,7 +104,7 @@ return `⋯ ▸ e : te[p/x,rfl/h]`.
 Otherwise return `none`. -/
 def castBack? (e te : Expr) : M (Option Expr) := do
   let ctx ← read
-  if !te.containsFVar ctx.x.fvarId! && !te.containsFVar ctx.h.fvarId! then
+  if !te.hasFVar || !te.hasAnyFVar (fun f => f == ctx.x.fvarId! || f == ctx.h.fvarId!) then
     return none
   let motive ←
     withLocalDeclD `x' (← inferType ctx.x) fun x' => do
@@ -163,6 +166,7 @@ partial def visit (e : Expr) (et? : Option Expr) : M Expr :=
   withTraceNode `drewrite.visit (fun
     | .ok e' => pure m!"{e} => {e'} (et: {et?})"
     | .error _ => pure m!"{e} => 💥️") do
+  checkCache { val := e : ExprStructEq } fun _ => Meta.withIncRecDepth do
   let ctx ← read
   if e.hasLooseBVars then
     throwError "internal error: forgot to instantiate"
@@ -249,7 +253,7 @@ def dabstract (e : Expr) (p : Expr) (cfg : DRewrite.Config) : MetaM Expr := do
     | .error (err : Lean.Exception) => pure m!"{e} =[x/{p}]=> 💥️{indentD err.toMessageData}") do
   withLocalDeclD `x tp fun x => do
   withLocalDeclD `h (← mkEq p x) fun h => do
-    let e' ← visit e none |>.run { cfg, p, x, h } |>.run' 1
+    let e' ← visit e none |>.run { cfg, p, x, h } |>.run |>.run' 1
     mkLambdaFVars #[x, h] e'
 
 /--
