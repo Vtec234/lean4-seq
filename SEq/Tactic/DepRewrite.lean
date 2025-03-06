@@ -142,6 +142,7 @@ partial def visitAndCast (e : Expr) (et? : Option Expr) : M Expr := do
   -- Increase transparency to avoid inserting unnecessary casts
   -- between definientia and definienda (δ reductions).
   if ← withAtLeastTransparency .default <| withNewMCtxDepth <| isDefEq te' et then
+    trace[drewrite.cast] "defeq! {e'} has type {te'} ≡ {et}"
     return e'
   trace[drewrite.cast] "casting{indentD e'}\nto expected type{indentD et}"
   checkCastAllowed e' te' et
@@ -195,7 +196,7 @@ partial def visit (e : Expr) (et? : Option Expr) : M Expr :=
         -- so that other matches are still possible.
         setMCtx mctx
   match e with
-  | .mdata _ b => return e.updateMData! (← visitAndCast b et?)
+  | .mdata d b => return .mdata d (← visitAndCast b et?)
   | .app f a =>
     let fup ← visit f none
     let tfup ← inferType fup
@@ -209,36 +210,25 @@ partial def visit (e : Expr) (et? : Option Expr) : M Expr :=
     let tbup ← inferType bup
     if !tbup.isAppOf n then
       throwError m!"projection type mismatch{indentD <| Expr.proj n i bup}"
-    return e.updateProj! bup
-  | .letE n t v b _ =>
+    return .proj n i bup
+  | .letE n t v b bi =>
     let tup ← visit t none
     let vup ← visitAndCast v tup
-    withLetDecl n tup vup fun l => do
-    withSubst? l tup do
-      let bup ← visitAndCast (b.instantiate1 l) et?
-      return e.updateLet! tup vup (bup.abstract #[l])
-  | .lam _ t b _ =>
-    match et? with
-    | some et =>
-      forallBoundedTelescope et (some 1) fun xs bet => do
-        let #[r] := xs | throwError m!"function type expected{indentD et}"
-        withSubst? r (← inferType r) do
-          let bup ← visitAndCast (b.instantiate1 r) bet
-          mkLambdaFVars xs bup
-    | none =>
-      let tup ← visit t none
-      lambdaBoundedTelescope (e.updateLambdaE! tup b) 1 fun xs b => do
-        let #[r] := xs | throwError m!"internal error: lambda expected"
-        withSubst? r tup do
-          let bup ← visit b none
-          mkLambdaFVars xs bup
-  | .forallE _ t b _ =>
+    withLetDecl n tup vup fun r => withSubst? r tup do
+      let bup ← visitAndCast (b.instantiate1 r) et?
+      return .letE n tup vup (bup.abstract #[r]) bi
+  | .lam n t b bi =>
     let tup ← visit t none
-    forallBoundedTelescope (e.updateForallE! tup b) (some 1) fun xs b => do
-      let #[r] := xs | throwError m!"internal error: forall expected"
-      withSubst? r tup do
-        let bup ← visit b none
-        mkForallFVars xs bup
+    withLocalDecl n bi tup fun r => do
+      -- TODO(WN): there should be some way to propagate the expected type here,
+      -- but it is not easy to do correctly (see `lam (as argument)` tests).
+      let bup ← withSubst? r tup <| visit (b.instantiate1 r) none
+      return .lam n tup (bup.abstract #[r]) bi
+  | .forallE n t b bi =>
+    let tup ← visit t none
+    withLocalDecl n bi tup fun r => withSubst? r tup do
+      let bup ← visit (b.instantiate1 r) none
+      return .forallE n tup (bup.abstract #[r]) bi
   | _ => return e
 
 end

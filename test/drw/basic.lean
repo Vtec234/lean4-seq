@@ -31,7 +31,7 @@ variable {n m : Nat} (eq : n = m)
 -- mdata
 example (f : (k : Nat) → 0 < k → Type) (lt : 0 < n) : P (mdata% f n lt) := by
   rewrite! [eq]
-  guard_target = P (f m _)
+  guard_target =ₐ P (mdata% f m (eq ▸ lt))
   sorry
 
 -- app (fn)
@@ -46,14 +46,14 @@ example (any : (α : Type) → α) (eq : (Nat → Nat) = Bool) :
 -- app (arg)
 example (f : (k : Nat) → Fin k → Type) (lt : 0 < n) : P (f n ⟨0, lt⟩) := by
   rewrite! [eq]
-  guard_target = P (f m ⟨0, _⟩)
+  guard_target =ₐ P (f m ⟨0, eq ▸ lt⟩)
   sorry
 
 -- proj
 example (f : (k : Nat) → Fin k → Type) (lt : 0 < n) :
     P (fst% ((⟨0, lt⟩, ()) : Fin n × Unit)) := by
   rewrite! [eq]
-  guard_target = P (fst% ((⟨0, _⟩, ()) : Fin m × Unit))
+  guard_target =ₐ P (fst% ((⟨0, eq ▸ lt⟩, ()) : Fin m × Unit))
   sorry
 
 /-- error: projection type mismatch
@@ -69,9 +69,9 @@ example (lt : 0 < n) :
     let A : Type := Fin n
     P (@id A ⟨0, lt⟩) := by
   rewrite! [eq]
-  guard_target =
+  guard_target =ₐ
     let A : Type := Fin m
-    P (@id A ⟨0, _⟩)
+    P (@id A ⟨0, eq ▸ lt⟩)
   sorry
 
 -- let (type)
@@ -79,8 +79,8 @@ example (lt : 0 < n) :
     let x : Fin n := ⟨0, lt⟩
     P (@id (Fin n) x) := by
   rewrite! [eq]
-  guard_target =
-    let x : Fin m := ⟨0, _⟩
+  guard_target =ₐ
+    let x : Fin m := ⟨0, eq ▸ lt⟩
     P (@id (Fin m) x)
   sorry
 
@@ -93,13 +93,19 @@ example (lt' : 0 < n) : P (let lt : 0 < n := lt'; @Fin.mk n 0 (@id (0 < n) lt)) 
 -- lam
 example : P fun (y : Fin n) => y := by
   rewrite! [eq]
-  guard_target = P fun (y : Fin m) => y
+  guard_target =ₐ P fun (y : Fin m) => y
   sorry
 
 -- lam (proof)
 example : P fun (lt : 0 < n) => @Fin.mk n 0 (@id (0 < n) lt) := by
   rewrite! [eq]
   guard_target = P fun (lt : 0 < m) => @Fin.mk m 0 (@id (0 < m) _)
+  sorry
+
+-- forall
+example : P (forall (lt : 0 < n), @Eq (Fin n) ⟨0, lt⟩ ⟨0, lt⟩) := by
+  rewrite! [eq]
+  guard_target =ₐ P (forall (lt : 0 < m), @Eq (Fin m) ⟨0, eq ▸ lt⟩ ⟨0, eq ▸ lt⟩)
   sorry
 
 /-- error: cannot cast
@@ -133,6 +139,27 @@ example (f : B n → Nat) (b : (k : Nat) → B k) : P (f (b n)) := by
 example (f : B n → Nat) : P fun y : B n => f y := by
   rewrite! (castMode := .all) [eq]
   guard_target = P fun y : B m => f (eq ▸ y)
+  sorry
+
+-- lam (as argument, contravariant)
+example (F : (f : Fin n → Nat) → Nat) :
+    P (F fun y : Fin n => y.1) := by
+  rewrite! (castMode := .all) [eq]
+  guard_target =ₐ P (F (eq ▸ fun y : Fin m => y.1))
+  sorry
+
+-- lam (as argument, covariant)
+example (F : (f : Nat → Fin (n+1)) → Nat) :
+    P (F fun k : Nat => @Fin.ofNat n k) := by
+  rewrite! (castMode := .all) [eq]
+  guard_target =ₐ P (F (eq ▸ fun k : Nat => @Fin.ofNat m k))
+  sorry
+
+-- lam (as argument, invariant)
+example (b : (k : Nat) → B k) (F : (f : (k : Fin n) → B k.1) → Nat) :
+    P (F fun k : Fin n => b k.1) := by
+  rewrite! (castMode := .all) [eq]
+  guard_target =ₐ P (F (eq ▸ fun k : Fin m => b k.1))
   sorry
 
 /-- error: tactic 'drewrite' failed, did not find instance of the pattern in the target expression
