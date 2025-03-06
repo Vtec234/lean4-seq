@@ -161,7 +161,6 @@ partial def visitAndCast (e : Expr) (et? : Option Expr) : M Expr := do
 
 /-- Like `visitAndCast`, but does not insert casts at the top level.
 The expected types of certain subterms are computed from `et?`. -/
--- QUESTION(WN): would a `visit` cache speed this up?
 partial def visit (e : Expr) (et? : Option Expr) : M Expr :=
   withTraceNode `drewrite.visit (fun
     | .ok e' => pure m!"{e} => {e'} (et: {et?})"
