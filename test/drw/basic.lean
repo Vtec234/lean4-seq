@@ -175,3 +175,13 @@ example (f : B n → Nat) (b : B n) :
     f b = f b := by
   rewrite! [eq]
   sorry
+
+/-! Tests for proof-only mode, rewriting compound terms (non-fvars). -/
+
+variable {foo : Nat → Nat} {bar : Nat → Nat} (eq : foo n = bar m)
+
+-- app (arg)
+example (f : (k : Nat) → Fin k → Type) (lt : 0 < foo n) : P (f (foo n) ⟨0, lt⟩) := by
+  rewrite! [eq]
+  guard_target =ₐ P (f (bar m) ⟨0, eq ▸ lt⟩)
+  sorry

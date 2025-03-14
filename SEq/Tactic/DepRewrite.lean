@@ -161,6 +161,9 @@ partial def visitAndCast (e : Expr) (et? : Option Expr) : M Expr := do
 
 /-- Like `visitAndCast`, but does not insert casts at the top level.
 The expected types of certain subterms are computed from `et?`. -/
+-- TODO(WN): further speedup might come from returning whether anything
+-- was rewritten inside a `visit`,
+-- and then skipping the type correctness check if it wasn't.
 partial def visit (e : Expr) (et? : Option Expr) : M Expr :=
   withTraceNode `drewrite.visit (fun
     | .ok e' => pure m!"{e} => {e'} (et: {et?})"
