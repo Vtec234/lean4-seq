@@ -284,7 +284,7 @@ def _root_.Lean.MVarId.depRewrite (mvarId : MVarId) (e : Expr) (heq : Expr)
           let eType ← inferType e
           -- `eNew ≡ eAbst rhs heq`
           let eNew := eBody.instantiateRev #[rhs, heq]
-          -- Has the type of the overall term changed?
+          -- Has the type of the term that we rewrote changed?
           -- (Checking whether the motive depends on `x` is overly conservative:
           -- when rewriting by a definitional equality,
           -- the motive may use `x` while the type remains the same.)
