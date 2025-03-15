@@ -108,15 +108,22 @@ example : P (forall (lt : 0 < n), @Eq (Fin n) ⟨0, lt⟩ ⟨0, lt⟩) := by
   guard_target =ₐ P (forall (lt : 0 < m), @Eq (Fin m) ⟨0, eq ▸ lt⟩ ⟨0, eq ▸ lt⟩)
   sorry
 
-/-- error: cannot cast
+/-- error: Will not cast
   y
-to expected type
-  Fin n
-in cast mode 'proofs' -/
+in cast mode 'proofs'. If inserting more casts is acceptable, use `(castMode := .all)`. -/
 #guard_msgs in
 example (Q : Fin n → Prop) (q : (x : Fin n) → Q x) :
     P fun y : Fin n => q y := by
   rewrite! [eq]
+  sorry
+
+/-- error:
+Will not cast
+  ⟨0, ⋯⟩
+in cast mode 'proofs'. If inserting more casts is acceptable, use `(castMode := .all)`. -/
+#guard_msgs in
+example (f : (k : Nat) → Fin k → Type) (lt : 0 < n) : P (f n ⟨0, lt⟩) := by
+  conv in Fin.mk .. => rewrite! [eq]
   sorry
 
 /-! Tests for all-casts mode. -/

@@ -89,31 +89,32 @@ The cache is for `visit` (not `visitAndCast`, which has two arguments),
 and the `Nat` tracks which occurrence of the pattern we are currently seeing. -/
 abbrev M := ReaderT Context <| MonadCacheT ExprStructEq Expr <| StateRefT Nat MetaM
 
-/-- Check that casting `e : t` to `et` is allowed in the current mode. -/
-def checkCastAllowed (e t et : Expr) : M Unit := do
-  let ctx ← read
-  let throwMismatch : Unit → M Unit := fun _ => do
-    throwError "cannot cast{indentD e}\nto expected type{indentD et}\nin cast mode '{ctx.cfg.castMode}'"
-  if ctx.cfg.castMode == .none then
+/-- Check that casting `e : t` is allowed in the current mode.
+(We don't need to know what type `e` is cast to:
+we only check the sort of `t`, and it cannot change.) -/
+def checkCastAllowed (e t : Expr) (castMode : CastMode) : MetaM Unit := do
+  let throwMismatch : Unit → MetaM Unit := fun _ => do
+    throwError "Will not cast{indentExpr e}\nin cast mode '{castMode}'. If inserting more casts is acceptable, use `(castMode := .all)`."
+  if castMode == .none then
     throwMismatch ()
-  if ctx.cfg.castMode == .proofs && !(← isProp t) then
+  if castMode == .proofs && !(← isProp t) then
     throwMismatch ()
 
 /-- If `e : te` is a term whose type mentions `x` or `h` (the generalization variables),
 return `⋯ ▸ e : te[p/x,rfl/h]`.
 Otherwise return `none`. -/
-def castBack? (e te : Expr) : M (Option Expr) := do
-  let ctx ← read
-  if !te.hasFVar || !te.hasAnyFVar (fun f => f == ctx.x.fvarId! || f == ctx.h.fvarId!) then
+def castBack? (e te x h : Expr) : MetaM (Option Expr) := do
+  if !te.hasFVar || !te.hasAnyFVar (fun f => f == x.fvarId! || f == h.fvarId!) then
     return none
   let motive ←
-    withLocalDeclD `x' (← inferType ctx.x) fun x' => do
-    withLocalDeclD `h' (← mkEq ctx.x x') fun h' => do
-      mkLambdaFVars #[x', h'] <| te.replaceFVars #[ctx.x, ctx.h] #[x', ← mkEqTrans ctx.h h']
-  some <$> mkEqRec motive e (← mkEqSymm ctx.h)
+    withLocalDeclD `x' (← inferType x) fun x' => do
+    withLocalDeclD `h' (← mkEq x x') fun h' => do
+      mkLambdaFVars #[x', h'] <| te.replaceFVars #[x, h] #[x', ← mkEqTrans h h']
+  some <$> mkEqRec motive e (← mkEqSymm h)
 
 def withSubst? (x tx : Expr) (k : M α) : M α := do
-  match ← castBack? x tx with
+  let ctx ← read
+  match ← castBack? x tx ctx.x ctx.h with
   | some e =>
     -- We do NOT check whether this is an allowed cast here
     -- because it might not ever be used
@@ -143,20 +144,20 @@ partial def visitAndCast (e : Expr) (et? : Option Expr) : M Expr := do
   -- between definientia and definienda (δ reductions).
   if ← withAtLeastTransparency .default <| withNewMCtxDepth <| isDefEq te' et then
     return e'
-  trace[drewrite.cast] "casting{indentD e'}\nto expected type{indentD et}"
-  checkCastAllowed e' te' et
+  trace[drewrite.cast] "casting{indentExpr e'}\nto expected type{indentExpr et}"
+  let ctx ← read
+  checkCastAllowed e' te' ctx.cfg.castMode
   -- Try casting from the inferred type,
   -- and if that doesn't work,
   -- casting to the expected type.
-  let ctx ← read
-  if let some e'' ← castBack? e' te' then
+  if let some e'' ← castBack? e' te' ctx.x ctx.h then
     let te'' ← inferType e''
     if ← withAtLeastTransparency .default <| withNewMCtxDepth <| isDefEq te'' et then
-      trace[drewrite.cast] "from inferred type (x ↦ p):{indentD e'}"
+      trace[drewrite.cast] "from inferred type (x ↦ p):{indentExpr e'}"
       return e''
   let motive ← mkLambdaFVars #[ctx.x, ctx.h] et
   let e' ← mkEqRec motive e' ctx.h
-  trace[drewrite.cast] "to expected type (p ↦ x):{indentD e'}"
+  trace[drewrite.cast] "to expected type (p ↦ x):{indentExpr e'}"
   return e'
 
 /-- Like `visitAndCast`, but does not insert casts at the top level.
@@ -211,7 +212,7 @@ partial def visit (e : Expr) (et? : Option Expr) : M Expr :=
     let bup ← visit b none
     let tbup ← inferType bup
     if !tbup.isAppOf n then
-      throwError m!"projection type mismatch{indentD <| Expr.proj n i bup}"
+      throwError m!"projection type mismatch{indentExpr <| .proj n i bup}"
     return .proj n i bup
   | .letE n t v b bi =>
     let tup ← visit t none
@@ -268,38 +269,42 @@ def _root_.Lean.MVarId.depRewrite (mvarId : MVarId) (e : Expr) (heq : Expr)
           let e ← instantiateMVars e
           let eAbst ← withConfig (fun oldConfig => { config, oldConfig with }) <|
             dabstract e lhs config
-          let nAbst ← withLocalDeclD .anonymous α fun a ↦ do withLocalDeclD .anonymous (← mkEq lhs a) fun h ↦ do
-            mkLambdaFVars #[a, h] e
-          if ← withReducible (withNewMCtxDepth <| isDefEq eAbst nAbst) then
+          let .lam _ _ (.lam _ _ eBody _) _ := eAbst |
+            throwTacticEx `drewrite mvarId m! "internal error: output{indentExpr eAbst}\nof dabstract is not a lambda"
+          if !eBody.hasLooseBVars then
             throwTacticEx `drewrite mvarId m!"did not find instance of the pattern in the target expression{indentExpr lhs}"
           try
             check eAbst
           catch e : Lean.Exception =>
             throwTacticEx `drewrite mvarId <|
-              m!"motive{indentD eAbst}\nis not type correct:{indentD e.toMessageData}\n" ++
+              m!"motive{indentExpr eAbst}\nis not type correct:{indentD e.toMessageData}\n" ++
               m!"unlike with rw/rewrite, this error should NOT happen in rw!/rewrite!:\n" ++
               m!"please report it on the Lean Zulip"
           -- construct rewrite proof
           let eType ← inferType e
-          let eNew := match (← instantiateMVars eAbst) with
-            | .lam _ _ b _ => b.instantiate1 rhs
-            | _ => .app eAbst rhs
-          let eNew := match (← instantiateMVars eNew) with
-            | .lam _ _ b _ => b.instantiate1 heq
-            | _ => .app eNew heq
-          let (motive, dep) ← withLocalDeclD `_a α fun a ↦ do withLocalDeclD `_h (← mkEq lhs a) fun h ↦ do
-            let motive ← inferType (.app (.app eAbst a) h)
-            return (← mkLambdaFVars #[a, h] motive, not (← withNewMCtxDepth <| isDefEq motive eType))
+          -- `eNew ≡ eAbst rhs heq`
+          let eNew := eBody.instantiateRev #[rhs, heq]
+          -- Has the type of the overall term changed?
+          -- (Checking whether the motive depends on `x` is overly conservative:
+          -- when rewriting by a definitional equality,
+          -- the motive may use `x` while the type remains the same.)
+          let isDep ← withNewMCtxDepth <| not <$> (inferType eNew >>= isDefEq eType)
           let u1 ← getLevel α
           let u2 ← getLevel eType
-          -- `eqPrf : eAbst[lhs,rfl] = eNew`
-          -- `eAbst[lhs,rfl] ≡ target`
+          -- `eqPrf : eAbst lhs rfl = eNew`
+          -- `eAbst lhs rfl ≡ e`
           let (eNew, eqPrf) ← do
-            if dep then
-              let eNew ← withLocalDeclD `x α fun x ↦ do withLocalDeclD `h (← mkEq rhs x) fun h ↦ do
-                let motive ← mkLambdaFVars #[x, h] (.app (.app motive x) (← mkEqTrans heq h))
-                mkEqRec motive eNew (← mkEqSymm heq)
-              pure (eNew, mkApp6 (.const ``dcongrArg [u1, u2]) α lhs rhs motive heq eAbst)
+            if isDep then
+              lambdaBoundedTelescope eAbst 2 fun xs eBody => do
+                let #[x, h] := xs | throwError "internal error: expected 2 arguments in{indentExpr eAbst}"
+                let eBodyTp ← inferType eBody
+                checkCastAllowed eBody eBodyTp config.castMode
+                let some eBody ← castBack? eBody eBodyTp x h
+                  | throwError "internal error: body{indentExpr eBody}\nshould mention '{x}' or '{h}'"
+                let motive ← mkLambdaFVars xs eBodyTp
+                pure (
+                  eBody.replaceFVars #[x, h] #[rhs, heq],
+                  mkApp6 (.const ``dcongrArg [u1, u2]) α lhs rhs motive heq eAbst)
             else
               pure (eNew, mkApp6 (.const ``nddcongrArg [u1, u2]) α lhs rhs eType heq eAbst)
           postprocessAppMVars `drewrite mvarId newMVars binderInfos
@@ -399,10 +404,10 @@ namespace Conv
 open Conv
 
 /-- `rewrite! [thm]` rewrites the target dependently using `thm`. See the `rewrite!` tactic for more information. -/
-syntax (name := depRewrite) "rewrite!" (config)? rwRuleSeq (location)? : conv
+syntax (name := depRewrite) "rewrite!" optConfig rwRuleSeq (location)? : conv
 
 /-- `rw! [thm]` rewrites the target using `thm`. See the `rw!` tactic for more information. -/
-syntax (name := depRw) "rw!" (config)? rwRuleSeq (location)? : conv
+syntax (name := depRw) "rw!" optConfig rwRuleSeq (location)? : conv
 
 def depRewriteTarget (stx : Syntax) (symm : Bool) (config : DRewrite.Config := {}) : TacticM Unit := do
   Term.withSynthesize <| withMainContext do
@@ -435,7 +440,7 @@ def depRwLocalDecl (stx : Syntax) (symm : Bool) (fvarId : FVarId) (config : DRew
 
 @[tactic depRewrite]
 def evalDepRewriteSeq : Tactic := fun stx => do
-  let cfg ← DRewrite.elabDRewriteConfig stx[1]
+  let cfg ← elabDRewriteConfig stx[1]
   let loc   := expandOptLocation stx[3]
   withRWRulesSeq stx[0] stx[2] fun symm term => do
     withLocation loc
@@ -445,7 +450,7 @@ def evalDepRewriteSeq : Tactic := fun stx => do
 
 @[tactic depRw]
 def evalDepRwSeq : Tactic := fun stx => do
-  let cfg ← DRewrite.elabDRewriteConfig stx[1]
+  let cfg ← elabDRewriteConfig stx[1]
   let loc   := expandOptLocation stx[3]
   withRWRulesSeq stx[0] stx[2] fun symm term => do
     withLocation loc
